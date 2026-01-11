@@ -1,0 +1,1 @@
+# ticket_details_extractor
