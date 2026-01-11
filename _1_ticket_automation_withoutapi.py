@@ -19,10 +19,6 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
-from google import genai
-from google.genai import types
-
-
 load_dotenv()
 
 # ================== CONFIG ==================
@@ -47,70 +43,6 @@ drive_service = build("drive", "v3", credentials=creds)
 sheets_service = build("sheets", "v4", credentials=creds)
 
 
-def is_bad_ocr(text: str) -> bool:
-    if not text:
-        return True
-
-    if len(text) < 80:
-        return True
-
-    alpha_ratio = sum(c.isalpha() for c in text) / max(len(text), 1)
-    if alpha_ratio < 0.25:
-        return True
-
-    return False
-
-
-
-class GeminiOCR:
-    """Gemini Vision OCR fallback"""
-
-    _client = None  # singleton
-
-    @staticmethod
-    def _get_client():
-        if GeminiOCR._client is None:
-            GeminiOCR._client = genai.Client()
-        return GeminiOCR._client
-
-    @staticmethod
-    def image_to_text(img: Image.Image) -> str:
-        """OCR one PIL image using Gemini Vision"""
-
-        client = GeminiOCR._get_client()
-
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG")
-        image_bytes = buf.getvalue()
-
-        image_part = types.Part.from_bytes(
-            data=image_bytes,
-            mime_type="image/jpeg"
-        )
-
-        prompt = (
-            "You are an OCR system.\n\n"
-            "Extract ALL readable text from the provided image exactly as seen.\n"
-            "Preserve line breaks where possible.\n\n"
-            "Rules:\n"
-            "- Do NOT summarize\n"
-            "- Do NOT infer missing text\n"
-            "- Do NOT add explanations\n\n"
-            "Return ONLY the extracted text."
-        )
-
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[prompt, image_part],
-            config={
-                "temperature": 0,
-                "max_output_tokens": 2048
-            }
-        )
-
-        return response.text.strip()
-
-
 class PNRExtractor:
     """Extract PNR and passenger info from tickets"""
     
@@ -132,9 +64,7 @@ class PNRExtractor:
         return images
     
     @staticmethod
-    def ocr_images_full(images: List[Image.Image], force_gemini: bool = False) -> str:
-
-    # def ocr_images_full(images: List[Image.Image]) -> str:
+    def ocr_images_full(images: List[Image.Image]) -> str:
         """Full OCR with enhanced quality - IMPROVED VERSION"""
         texts = []
         for idx, img in enumerate(images):
@@ -162,19 +92,10 @@ class PNRExtractor:
                 except:
                     continue
             
-
-            # ---------- GEMINI FALLBACK ----------
-            if force_gemini or is_bad_ocr(best_text):
-                print(f"⚠️ Using Gemini Vision OCR on page {idx+1}")
-                try:
-                    best_text = GeminiOCR.image_to_text(img)
-                except Exception as e:
-                    print(f"✗ Gemini OCR failed: {e}")
-
             print(f"\n{'='*30}\nOCR OUTPUT — PAGE {idx + 1}\n{'='*30}")
             print(best_text[:500] + "..." if len(best_text) > 500 else best_text)
             print("=" * 30 + "\n")
-
+            
             texts.append(best_text)
         return "\n".join(texts)
     
@@ -617,54 +538,37 @@ class TicketProcessor:
         self.train_api = TrainPNRAPI()
         self.flight_extractor = FlightExtractor()
     
-    def _process_by_type(self, ticket_type: str, text: str, filename: str) -> Dict:
-        """
-        Route processing based on detected ticket type
-        """
-        if ticket_type == "FLIGHT":
-            return self.process_flight(text, filename)
-        elif ticket_type == "TRAIN":
-            return self.process_train(text, filename)
-        else:
-            return {
-                'error': 'Unknown ticket type (not a valid train/flight ticket)',
-                'filename': filename,
-                'mode': 'ERROR'
-            }
-
-
     def process_ticket(self, file_bytes: bytes, filename: str, mime_type: str) -> Dict:
         """Process ticket file"""
         print(f"\n{'='*70}\nProcessing: {filename}\n{'='*70}")
         
         try:
+            # OCR
             images = self.pnr_extractor.file_to_images(file_bytes, mime_type, filename)
             print(f"✓ Converted to {len(images)} image(s)")
-
-            # ---------- FIRST PASS ----------
+            
             full_text = self.pnr_extractor.ocr_images_full(images)
+            
+            # Detect type
             ticket_type = self.pnr_extractor.detect_ticket_type(full_text)
-            result = self._process_by_type(ticket_type, full_text, filename)
-
-            # ---------- FALLBACK PASS ----------
-            if result.get("error"):
-                print("🔁 Retrying extraction after Gemini OCR")
-                full_text = self.pnr_extractor.ocr_images_full(images, force_gemini=True)
-
-                # full_text = self.pnr_extractor.ocr_images_full(images)
-                ticket_type = self.pnr_extractor.detect_ticket_type(full_text)
-                result = self._process_by_type(ticket_type, full_text, filename)
-
-            return result
-
+            print(f"✓ Detected: {ticket_type}")
+            
+            if ticket_type == "FLIGHT":
+                return self.process_flight(full_text, filename)
+            elif ticket_type == "TRAIN":
+                return self.process_train(full_text, filename)
+            else:
+                return {
+                    'error': 'Unknown ticket type (not a valid train/flight ticket)',
+                    'filename': filename,
+                    'mode': 'ERROR'
+                }
         except Exception as e:
             return {
                 'error': f'Processing failed: {str(e)}',
                 'filename': filename,
                 'mode': 'ERROR'
             }
-    
-
     
     def process_flight(self, text: str, filename: str) -> Dict:
         """Process flight ticket"""
