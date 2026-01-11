@@ -275,6 +275,9 @@ class VerificationWorkflow:
         for ticket in tickets:
             passenger_name = ticket["name"]
             row_no = ticket["row_no"]
+
+            if ticket.get("commit_status") == "COMMITTED":
+                continue
             
             if ticket["mode"] == "ERROR":
                 print(f"⏭️  Row {row_no}: Skipping ERROR row")
