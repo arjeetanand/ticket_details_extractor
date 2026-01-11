@@ -1,114 +1,114 @@
-# 🎫 Wedding Ticket Automation System
+# Wedding Ticket Automation System
 
-A production-ready automation pipeline to process wedding guest travel tickets (Train & Flight), extract passenger details using OCR + APIs, reconcile them against a master guest list, and automatically update Google Sheets with arrival and departure logistics.
+End-to-end automation to **ingest wedding travel tickets (Train & Flight)** from Google Drive, **extract passenger and journey details using OCR + APIs**, **auto-match guest names against a Master guest list**, and **commit verified travel details into structured Google Sheets**.
 
-This system is built for real-world Indian train and flight tickets, handling noisy OCR, multiple formats, duplicates, and failures gracefully.
+This system is designed for **high-volume, semi-automated verification**, with human approval for edge cases (duplicates / low-confidence matches).
 
 ---
 
-## ✨ Key Features
+## High-Level Architecture
 
-### End-to-End Automation
+```
+Google Drive (Tickets)
+        │
+        ▼
+Apps Script Trigger (onDriveChange)
+        │  (HTTP POST via ngrok)
+        ▼
+FastAPI Server
+        │
+        ├── WeddingTicketAutomation
+        │     ├── OCR (PDF/Image)
+        │     ├── Ticket Type Detection
+        │     ├── Train PNR API / Flight Parsing
+        │     └── Append to Ticket Sheet
+        │
+        └── VerificationWorkflow
+              ├── Step 1: Name Matching & Suggestions
+              └── Step 2: Approval-Based Commit to Master Sheet
+```
 
-* Reads tickets directly from Google Drive
-* Supports PDF and image formats
-* Writes structured data into Google Sheets
-* Automatically moves processed files
+---
 
-### Intelligent OCR & Extraction
+## Features
 
-* Multi-pass OCR with image enhancement
-* Robust PNR extraction (including spaced digits)
+### Ticket Ingestion
+
+* Monitors a **Google Drive folder**
+* Supports:
+
+  * **Train tickets (IRCTC, Ixigo, screenshots, PDFs)**
+  * **Flight tickets (IndiGo, Air India, etc.)**
 * Handles:
 
-  * IRCTC tickets
-  * ixigo screenshots
-  * Flight boarding passes
-* Supports multiple passengers per ticket
+  * PDFs & images
+  * Multiple passengers per ticket
+  * OCR noise & low-quality scans
+* Automatically moves processed files to a **Processed folder**
 
-### Train Ticket Handling
+---
 
-* Live PNR verification using RapidAPI
+### Intelligent Data Extraction
+
+* **OCR with multi-pass enhancement**
+* **Ticket type detection** (TRAIN / FLIGHT / UNKNOWN)
+* **Train PNR validation** using RapidAPI
 * Extracts:
 
-  * Train number and name
   * Journey date
-  * Arrival and departure time (separate columns)
-  * Coach / berth / seat
-  * Passenger status
+  * Arrival & departure times (separate columns)
+  * Train / flight number
+  * Seat / berth details
+  * Passenger names
 
-### Flight Ticket Handling
-
-* Auto-detects airline and flight number
-* Extracts route, date, and times
-* Validates passenger names to avoid OCR garbage
-
-### Error-Tolerant by Design
-
-* Invalid or unknown files are still logged
-* Errors are written as rows in the sheet
-* No silent failures
+Invalid or unsupported files are logged as **ERROR rows** (never silently dropped).
 
 ---
 
-## 📁 Project Structure
+### Name Matching & Verification
 
-```
-.
-├── ticket_verification_batch.py   # Name matching + master sheet commit
-├── wedding_ticket_automation.py   # OCR + extraction + Drive automation
-├── service_account.json           # Google service account credentials
-├── .env                           # Environment variables
-├── README.md
-```
+* Fuzzy matching against **Master guest list**
+* Uses:
 
----
+  * `rapidfuzz.partial_ratio`
+  * `token_sort_ratio`
+* Normalizes:
 
-## 🔄 Overall Workflow
+  * Titles (Mr, Mrs, Kumar, Devi, etc.)
+  * OCR artifacts
+* Flags:
 
-### Phase 1 — Ticket Ingestion & Extraction
+  * **Exact matches**
+  * **Duplicate / ambiguous matches**
+  * **Unmatched names**
 
-1. Read files from Google Drive
-2. Convert PDFs/images to images
-3. Perform enhanced OCR
-4. Detect ticket type (TRAIN / FLIGHT)
-5. Extract passenger names, PNR, dates, times, and seat details
-6. Append rows to Ticket Sheet
-7. Move processed files to another Drive folder
-
-### Phase 2 — Name Matching & Verification
-
-1. Load Master Guest List
-2. Perform fuzzy matching using partial ratio and token sort ratio
-3. Write suggested names and confidence scores
-4. Flag duplicates for manual review
-
-### Phase 3 — Auto-Fill & Commit
-
-1. Auto-fill approved names
-2. Route data based on journey date
-3. Update Arrival or Departure columns in Master Sheet
-4. Mark rows as COMMITTED
+Results are written back to the Ticket Sheet for review.
 
 ---
 
-## 🗓️ Arrival vs Departure Logic
+### Approval-Based Commit Logic
 
-```
-journey_date >= 2026-02-13 → DEPARTURE
-journey_date <  2026-02-13 → ARRIVAL
-```
+* Fully automated **only after human approval**
+* Requires:
 
-* Uses journey_date only (not arrival date)
-* Ensures correct wedding logistics routing
+  * Approved name in column **P**
+  * `approve_commit = TRUE` in column **R**
+* Routing logic:
+
+  * `journey_date >= 2026-02-13` → **DEPARTURE**
+  * Earlier dates → **ARRIVAL**
+* Writes data into correct **Master Sheet columns**:
+
+  * Arrival → `I:N`
+  * Departure → `AE:AJ`
 
 ---
 
-## 📊 Google Sheets Schema
+## Google Sheets Structure
 
-### Ticket Sheet
+### Ticket Sheet (Example: `Sheet13`)
 
-| Column | Description                   |
+| Column | Purpose                       |
 | ------ | ----------------------------- |
 | A      | Journey Date                  |
 | B      | Departure Time                |
@@ -122,98 +122,116 @@ journey_date <  2026-02-13 → ARRIVAL
 | J      | Train Name / Airline          |
 | K      | Status / Route                |
 | L      | PNR                           |
-| M      | Source Filename               |
+| M      | Source File                   |
 | N      | Suggested Name                |
 | O      | Match Score                   |
 | P      | Approved Name                 |
 | Q      | Commit Status                 |
-
-### Master Sheet
-
-* Arrival Columns: `I → N`
-* Departure Columns: `AE → AJ`
+| R      | Approve Commit (TRUE/FALSE)   |
 
 ---
 
-## ⚙️ Environment Variables
+### Master Sheet
 
-Create a `.env` file:
+* Column A contains **canonical guest names**
+* Arrival & departure details are written into fixed column blocks
+* Supports multiple travel entries per guest
+
+---
+
+## FastAPI Endpoints
+
+### `POST /ingest-and-match`
+
+* Full automation:
+
+  * Ingest tickets from Drive
+  * Append to sheet
+  * Auto-match names
+
+### `POST /step2-commit`
+
+* Executes **approval-based commit**
+* Writes finalized data into Master Sheet
+
+---
+
+## Google Apps Script Trigger
+
+```javascript
+function onDriveChange(e) {
+  UrlFetchApp.fetch(
+    "https://<your-ngrok-url>.ngrok-free.dev/ingest-and-match",
+    {
+      method: "POST",
+      muteHttpExceptions: true
+    }
+  );
+}
+```
+
+* Triggered on Drive changes
+* Acts as the **bridge between Google Drive and FastAPI**
+* Uses **ngrok** to expose local FastAPI securely
+
+---
+
+## Environment Variables
 
 ```env
-SHEET_ID=your_google_sheet_id
-SHEET_NAME=Sheet13
-MASTER_SHEET=Master
+# Google
 SERVICE_ACCOUNT_FILE=service_account.json
+SHEET_ID=xxxxxxxx
+SHEET_NAME=Sheet13
+DRIVE_FOLDER_ID=xxxxxxxx
+PROCESSED_FOLDER_ID=xxxxxxxx
 
-DRIVE_FOLDER_ID=source_drive_folder_id
-PROCESSED_FOLDER_ID=processed_drive_folder_id
+# OCR
+TESSERACT_PATH=/usr/bin/tesseract
 
-RAPIDAPI_KEY=your_rapidapi_key
+# Train API
+RAPIDAPI_KEY=xxxxxxxx
 RAPIDAPI_HOST=irctc-indian-railway-pnr-status.p.rapidapi.com
 ```
 
 ---
 
-## ▶️ How to Run
+## Tech Stack
 
-### Step 1 — Process Tickets
-
-```bash
-python wedding_ticket_automation.py
-```
-
-### Step 2 — Auto-Match Names
-
-```bash
-python ticket_verification_batch.py 1
-```
-
-### Step 3 — Commit to Master Sheet
-
-```bash
-python ticket_verification_batch.py 2
-```
+* **FastAPI** – API orchestration
+* **Google Drive API** – File ingestion
+* **Google Sheets API** – Data store & workflow control
+* **Tesseract OCR + PIL + PyMuPDF**
+* **RapidFuzz** – Name matching
+* **RapidAPI (IRCTC PNR)**
+* **Google Apps Script**
+* **ngrok** – Secure public tunnel
 
 ---
 
-## 🧪 Edge Cases Handled
+## Operational Workflow
 
-* Spaced PNR digits
-* OCR artifacts (`|` → `I`, `!` → `I`)
-* Single-word names (e.g., SONAL)
-* Duplicate fuzzy matches
-* Invoice or receipt false positives
-* Partial API failures
-
----
-
-## 🧠 Tech Stack
-
-* Python 3.9+
-* Google Drive API
-* Google Sheets API
-* PyMuPDF
-* Tesseract OCR
-* RapidFuzz
-* RapidAPI (IRCTC PNR)
-* Pillow
+1. Upload tickets to Google Drive
+2. Apps Script triggers FastAPI
+3. Tickets are OCR-processed & appended
+4. Names are auto-matched
+5. Human reviews suggestions
+6. Admin sets `approve_commit = TRUE`
+7. Step 2 commits data to Master Sheet
 
 ---
 
-## 🚀 Production Notes
+## Design Philosophy
 
-* Idempotent commits (no duplicate writes)
-* Batch updates for Google Sheets
-* Graceful degradation on OCR or API failure
-* All errors logged for manual review
+* **No silent failures**
+* **Human-in-the-loop for critical decisions**
+* **Idempotent & resumable**
+* **Production-safe batch updates**
+* **Extensible for buses / hotels later**
 
 ---
 
-## 📌 Future Enhancements
+## Status
 
-* LLM-based name disambiguation
-* Seat conflict detection
-* WhatsApp or email notifications
-* Admin dashboard
-* PNR response caching
-
+**Production-ready**
+Actively used for real-world wedding guest travel coordination.

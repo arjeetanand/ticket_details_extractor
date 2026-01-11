@@ -145,7 +145,7 @@ class SheetManager:
         
         resp = sheets_service.spreadsheets().values().get(
             spreadsheetId=SHEET_ID,
-            range=f"{TICKET_SHEET}!A2:Q"
+            range=f"{TICKET_SHEET}!A2:R"
         ).execute()
         
         rows = resp.get("values", [])
@@ -173,7 +173,8 @@ class SheetManager:
                 "suggested": row[13] if len(row) > 13 else "",
                 "score": row[14] if len(row) > 14 else "",
                 "approved": row[15] if len(row) > 15 else "",
-                "commit_status": row[16] if len(row) > 16 else ""
+                "commit_status": row[16] if len(row) > 16 else "",
+                "approve_commit": row[17] if len(row) > 17 else ""
             })
         
         print(f"✅ Loaded {len(tickets)} tickets")
@@ -391,8 +392,13 @@ class VerificationWorkflow:
             if not approved_name or mode == "ERROR":
                 skipped += 1
                 continue
+
+            # if ticket["approve_commit"] != "TRUE":
+            if ticket.get("approve_commit") != "TRUE":
+                skipped += 1
+                continue
             
-            if ticket["commit_status"] == "COMMITTED":
+            if ticket.get("commit_status") == "COMMITTED":
                 skipped += 1
                 continue
             

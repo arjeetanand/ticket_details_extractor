@@ -5,6 +5,8 @@ service_account.json
 # Service account credentials
 service_account.json
 
+my.txt
+
 # Python
 __pycache__/
 *.py[cod]
