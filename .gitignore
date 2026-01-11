@@ -1,0 +1,19 @@
+# Environment variables
+.env
+venv\
+service_account.json
+# Service account credentials
+service_account.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
